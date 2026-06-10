@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["cube-core", "cube-cli", "src-tauri"]
+exclude = ["tmp-min2phase-test"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "Proprietary"
+authors = ["CubeQL team"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1

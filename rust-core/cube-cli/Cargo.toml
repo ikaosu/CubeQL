@@ -1,0 +1,16 @@
+[package]
+name = "cube-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "CLI driver for cube-core: solve a project (.gencube.json) from the command line."
+
+[dependencies]
+cube-core = { path = "../cube-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "cube-cli"
+path = "src/main.rs"

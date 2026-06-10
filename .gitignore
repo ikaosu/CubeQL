@@ -1,0 +1,11 @@
+node_modules/
+.vite/
+out/
+dist/
+*.log
+.DS_Store
+
+tools/
+rust-core/target/
+dist-tauri/
+

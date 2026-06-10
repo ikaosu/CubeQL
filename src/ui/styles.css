@@ -1,0 +1,473 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family:
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    Arial,
+    sans-serif;
+  font-size: 13px;
+  background: #1d1f23;
+  color: #e4e4e4;
+  /* Disable WebView2 overscroll bounce (wheel/touchpad rubber-banding when
+     scrolling outside the .solutions list). Page-level scroll is never
+     intended — solutions is the only scrollable region. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "header header"
+    "left right";
+  gap: 12px;
+  padding: 0 12px 12px;
+  height: 100%;
+  position: relative;
+}
+
+.app-header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 4px 8px;
+  border-bottom: 1px solid #2a2d33;
+}
+
+.app-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.app-logo {
+  font-size: 22px;
+  color: #6fb6ff;
+  line-height: 1;
+}
+
+.app-name {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #e4e4e4;
+}
+
+.app-tagline {
+  font-size: 11px;
+  color: #6a6e76;
+  letter-spacing: 0.3px;
+}
+
+.app-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.cube-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.left {
+  grid-area: left;
+}
+
+.right {
+  grid-area: right;
+}
+
+.build-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: #3a2d1a;
+  color: #ffd58a;
+  border-bottom: 1px solid #5a4520;
+  padding: 6px 12px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.panel-header h2 {
+  margin: 0 !important;
+}
+
+.ghost-button {
+  background: transparent;
+  border: 1px solid #3a3d44;
+  color: #a0a4ad;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ghost-button:hover {
+  background: #34373e;
+  color: #e4e4e4;
+}
+.ghost-button[aria-pressed="true"] {
+  background: #34373e;
+  color: #e4e4e4;
+  border-color: #4a4d54;
+}
+
+/* --- CubeQL help panel --- */
+
+.cql-help {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #1d1f23;
+  border: 1px solid #34373e;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 360px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.cql-help h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #6fb6ff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cql-help h4 {
+  margin: 12px 0 4px;
+  font-size: 11px;
+  color: #a0a4ad;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.cql-help-lead {
+  margin: 0 0 8px;
+  color: #c4c4c4;
+}
+.cql-help code {
+  background: #2a2d33;
+  color: #80c080;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  font-size: 11px;
+}
+.cql-help-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4px 0;
+}
+.cql-help-table th,
+.cql-help-table td {
+  border-bottom: 1px solid #2a2d33;
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.cql-help-table th {
+  color: #909094;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.cql-help-table td:first-child {
+  white-space: nowrap;
+  width: 35%;
+}
+.cql-help-moves,
+.cql-help-examples {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.cql-help-moves li,
+.cql-help-examples li {
+  margin: 2px 0;
+}
+.cql-help-foot {
+  margin: 10px 0 0;
+  color: #6a6e76;
+  font-size: 11px;
+}
+
+.panel {
+  background: #2a2d33;
+  border: 1px solid #3a3d44;
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Panels never shrink. If total .left/.right content exceeds the column
+     height, the column itself scrolls (overflow-y: auto). Otherwise the
+     cube image and `apply moves` input would get squeezed out of their
+     panel when a sibling panel grows. */
+  flex-shrink: 0;
+}
+
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #a0a4ad;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.left,
+.right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  /* Safety net only — kicks in if total content exceeds column height.
+     Normally invisible because `.panel { flex-shrink: 0 }` + compact panels
+     keep total content within the viewport. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* --- Facelet/Mask editor --- */
+
+.facelet {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-template-rows: repeat(9, 1fr);
+  gap: 2px;
+  /* Pin to a fixed pixel size so the cube image never resizes when sibling
+     content (validity error, preset description, etc.) toggles. */
+  width: 480px;
+  height: 360px;
+  max-width: 100%;
+  margin: 12px auto;
+  user-select: none;
+  background: #1d1f23;
+  padding: 2px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.cell {
+  border: 1px solid #1a1c20;
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  transition: opacity 0.1s;
+}
+
+.cell.dontcare::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(0, 0, 0, 0.55),
+    rgba(0, 0, 0, 0.55) 4px,
+    rgba(255, 255, 255, 0.18) 4px,
+    rgba(255, 255, 255, 0.18) 8px
+  );
+  border-radius: 2px;
+}
+
+.cell-empty {
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+
+.color-U {
+  background: #f5f5f5;
+}
+.color-D {
+  background: #fce05a;
+}
+.color-R {
+  background: #ed3232;
+}
+.color-L {
+  background: #ff8a23;
+}
+.color-F {
+  background: #43c95c;
+}
+.color-B {
+  background: #3a7ce0;
+}
+.color-masked {
+  background: #4a4d54;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.swatch.active {
+  border-color: #ddd;
+  box-shadow: 0 0 0 2px #2a2d33;
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+button {
+  background: #3a3d44;
+  color: #e4e4e4;
+  border: 1px solid #4a4d54;
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+button:hover:not(:disabled) {
+  background: #44474e;
+}
+button.primary {
+  background: #2c7bc0;
+  border-color: #2c7bc0;
+}
+button.primary:hover:not(:disabled) {
+  background: #3987d0;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select,
+input[type="number"],
+input[type="text"],
+textarea {
+  background: #1d1f23;
+  color: #e4e4e4;
+  border: 1px solid #4a4d54;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+textarea {
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  width: 100%;
+  resize: vertical;
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.dsl-error {
+  color: #ed5050;
+  margin-top: 6px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+}
+
+.dsl-preview {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #1d1f23;
+  border-radius: 3px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  color: #80c080;
+  white-space: pre-wrap;
+}
+
+.solutions {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* Reserve vertical scrollbar space even when not needed so the panel
+     width doesn't jump when the first solution arrives. */
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+.solution-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  border-bottom: 1px solid #25272c;
+}
+.solution-row:last-child {
+  border-bottom: none;
+}
+.solution-row:hover {
+  background: #34373e;
+}
+.solution-row .len {
+  color: #6fb6ff;
+  width: 32px;
+  text-align: right;
+  font-weight: 600;
+}
+.solution-row .moves {
+  flex: 1;
+  color: #e4e4e4;
+  user-select: text;
+}
+
+.progress {
+  font-size: 11px;
+  color: #909094;
+  margin-top: 6px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.menu {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
