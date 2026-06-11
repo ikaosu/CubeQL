@@ -244,7 +244,7 @@ pub fn search_cubie_ex(
             &face_moves,
             &adm,
             &pdbs,
-            enumerate,
+            if enumerate { DfsMode::EnumerateAny } else { DfsMode::ShortestStop },
             min_length,
             bl_state.as_mut(),
             &mut path,
@@ -376,6 +376,24 @@ fn combined_lower_bound(
     lb
 }
 
+/// `mode` for `dfs_search`. Controls when goals are checked and whether we
+/// bail after the first solution.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DfsMode {
+    /// Check goal at every node (legacy `enumerate=true` semantics).
+    /// Finds solutions of any length 0..=max_depth in one tree walk; fastest
+    /// for "All ≤ N" but emits in DFS order, not length order.
+    EnumerateAny,
+    /// Check goal only at `remaining=0`; return after first solution found.
+    /// Used by `ShortestOnly` mode's iterative deepening — caller invokes
+    /// once per depth and stops at the first depth that yields anything.
+    ShortestStop,
+    /// Check goal only at `remaining=0`; find *all* solutions of exactly
+    /// that depth. Caller drives iterative deepening for ordered streaming
+    /// of `EnumerateUpToN`.
+    ExactDepthAll,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dfs_search(
     state: &CubieState,
@@ -387,7 +405,7 @@ fn dfs_search(
     face_moves: &[CubieMove],
     adm: &LbAdmissibility,
     pdbs: &LbPdbRefs,
-    enumerate: bool,
+    mode: DfsMode,
     min_length: usize,
     base_limit_state: Option<&mut BaseLimitState>,
     path: &mut Vec<usize>,
@@ -418,11 +436,20 @@ fn dfs_search(
     //
     // `min_length` (= quantifier min on a single-set pattern) gates emit:
     // a candidate must have path.len() >= min_length to be accepted.
-    if enumerate && path.len() >= min_length && is_goal(state, goal_corners, goal_edges) {
+    // EnumerateAny: check at every node; emit any matching length.
+    // ShortestStop / ExactDepthAll: only check at remaining=0, so the
+    // emitted path.len() equals the IDA* iteration depth exactly.
+    if matches!(mode, DfsMode::EnumerateAny)
+        && path.len() >= min_length
+        && is_goal(state, goal_corners, goal_edges)
+    {
         solutions.push(path.clone());
     }
     if remaining == 0 {
-        if !enumerate && path.len() >= min_length && is_goal(state, goal_corners, goal_edges) {
+        if !matches!(mode, DfsMode::EnumerateAny)
+            && path.len() >= min_length
+            && is_goal(state, goal_corners, goal_edges)
+        {
             solutions.push(path.clone());
         }
         return;
@@ -478,7 +505,7 @@ fn dfs_search(
                 face_moves,
                 adm,
                 pdbs,
-                enumerate,
+                mode,
                 min_length,
                 bl_ref.as_deref_mut(),
                 path,
@@ -491,7 +518,9 @@ fn dfs_search(
                 bl.unapply(move_idx_cubie);
             }
             path.pop();
-            if !enumerate && !solutions.is_empty() {
+            // Early-bail only in ShortestStop mode (first solution suffices).
+            // ExactDepthAll keeps exploring to find every solution of this depth.
+            if matches!(mode, DfsMode::ShortestStop) && !solutions.is_empty() {
                 return;
             }
             if *cancelled {
@@ -562,7 +591,7 @@ pub fn search_cubie_parallel(
         0,
         None,
         excluded_face_axes,
-        enumerate,
+        if enumerate { DfsMode::EnumerateAny } else { DfsMode::ShortestStop },
         should_cancel,
     )
 }
@@ -584,7 +613,7 @@ pub fn search_cubie_parallel_ex(
     min_length: usize,
     base_limit_state: Option<BaseLimitState>,
     excluded_face_axes: [bool; 6],
-    enumerate: bool,
+    mode: DfsMode,
     should_cancel: &(dyn Fn() -> bool + Sync),
 ) -> (Vec<Vec<usize>>, usize, u128) {
     let start = Instant::now();
@@ -598,15 +627,16 @@ pub fn search_cubie_parallel_ex(
     let total_nodes = AtomicUsize::new(0);
     let cancelled = AtomicBool::new(false);
 
-    // Enumerate mode: single DFS to max_depth with goal-check at every
-    // level (see `dfs_search`). Solutions of every length 0..=max_depth
-    // get collected in one tree walk.
-    // ShortestOnly mode: iterative deepening 0, 1, ..., max_depth — stops
-    // at the first depth that yields any solution.
-    let depth_range: Vec<usize> = if enumerate {
-        vec![max_depth]
-    } else {
-        (0..=max_depth).collect()
+    // EnumerateAny: single DFS to max_depth, goal-check at every level
+    //               (legacy `enumerate=true` behavior; emits unordered).
+    // ShortestStop: iterative deepening 0, 1, ..., max_depth, stop at
+    //               first depth with any solution (ShortestOnly mode).
+    // ExactDepthAll: single DFS at exact `max_depth`, find every
+    //                length-`max_depth` solution without early bail —
+    //                caller drives the deepening loop for ordered emit.
+    let depth_range: Vec<usize> = match mode {
+        DfsMode::EnumerateAny | DfsMode::ExactDepthAll => vec![max_depth],
+        DfsMode::ShortestStop => (0..=max_depth).collect(),
     };
 
     for &depth in &depth_range {
@@ -620,6 +650,7 @@ pub fn search_cubie_parallel_ex(
         }
 
         let found_this_depth = AtomicBool::new(false);
+        let stop_at_first = matches!(mode, DfsMode::ShortestStop);
 
         // Parallelize over the 6 face axes at the root. Each axis-thread
         // tries 3 variants × subtree DFS. Each axis-thread clones the
@@ -631,7 +662,7 @@ pub fn search_cubie_parallel_ex(
             if cancelled.load(Ordering::Relaxed) {
                 return;
             }
-            if !enumerate && found_this_depth.load(Ordering::Relaxed) {
+            if stop_at_first && found_this_depth.load(Ordering::Relaxed) {
                 return;
             }
             if depth == 0 {
@@ -640,16 +671,13 @@ pub fn search_cubie_parallel_ex(
             }
             let physical_axis = axis / 2;
             for variant in 0..3 {
-                if !enumerate && found_this_depth.load(Ordering::Relaxed) {
+                if stop_at_first && found_this_depth.load(Ordering::Relaxed) {
                     return;
                 }
                 if cancelled.load(Ordering::Relaxed) {
                     return;
                 }
                 let mv_idx = axis * 3 + variant;
-                // BaseLimit check at root: clone the template per axis-thread,
-                // pre-apply the root move's counters. If the root move itself
-                // exceeds a limit, skip it (e.g. `[F*<=0]` with axis=F).
                 let mut local_bl = bl_template.clone();
                 if let Some(bl) = local_bl.as_mut() {
                     if !bl.can_apply(mv_idx) {
@@ -673,7 +701,7 @@ pub fn search_cubie_parallel_ex(
                     &face_moves,
                     &adm,
                     &pdbs,
-                    enumerate,
+                    mode,
                     min_length,
                     local_bl.as_mut(),
                     &mut local_path,
@@ -691,21 +719,22 @@ pub fn search_cubie_parallel_ex(
             }
         });
 
-        // Depth 0 (or first enumerate pass): check empty path. dfs_search
+        // Depth 0 (or EnumerateAny pass): check empty path. dfs_search
         // is only called after applying one move at the parallel root, so
         // it never sees the initial state itself.
         // Empty solution (length 0) only valid if min_length is 0.
-        if (depth == 0 || enumerate) && min_length == 0 {
+        let allow_empty = depth == 0 || matches!(mode, DfsMode::EnumerateAny);
+        if allow_empty && min_length == 0 {
             if is_goal(initial, goal_corners, goal_edges) {
                 let mut guard = solutions_mu.lock().unwrap();
                 guard.push(Vec::new());
-                if !enumerate {
+                if stop_at_first {
                     break;
                 }
             }
         }
 
-        if !enumerate && !solutions_mu.lock().unwrap().is_empty() {
+        if stop_at_first && !solutions_mu.lock().unwrap().is_empty() {
             break;
         }
     }
@@ -843,15 +872,34 @@ pub fn try_cubie_dispatch(
             return None;
         }
     }
-    // Multi-element / literal patterns (e.g. `<U> F <R,U> F' <U>`) carry
-    // *positional* constraints that the cubie engine's `excludeAxis`-based
-    // collapse loses. Fall back to the legacy facelet engine which compiles
-    // patterns element-by-element with per-position move tables.
-    // Single-set patterns (with or without quantifier range) keep the cubie
-    // path because there is no positional structure to lose.
-    let single_set = pattern.elements.len() == 1
-        && matches!(&pattern.elements[0], PatternElement::Set { .. });
-    if !single_set {
+    // Multi-element / literal patterns carry positional or quantifier
+    // structure that the cubie engine's `excludeAxis` collapse loses.
+    // Fall back to the legacy facelet engine when:
+    //   - any element is a Literal (e.g. `<U> F <R,U> F' <U>` — losing the
+    //     literal F / F' position and direction would produce wrong solves),
+    //   - OR the pattern has more than one element AND any Set has a
+    //     non-default quantifier (e.g. `<U> <R,U,F,D>{2,3} <U>` — losing the
+    //     per-set length bound would let mis-sized middle sections through).
+    //
+    // Multi-Set-only patterns with all-default quantifiers (e.g.
+    // `<U> <R,U,F,D> <U>` or `<U,R,F> <U,R>`) are safe to dispatch to the
+    // cubie engine: the axis-union subgroup is exactly the set of moves any
+    // solution may use, and any cubie-found solution within that subgroup
+    // can be partitioned to satisfy the original structure (the bookend Sets
+    // can be the empty subsequence). For shortest-only / enumerate this
+    // yields identical results to legacy with much better throughput.
+    let multi = pattern.elements.len() > 1;
+    let has_literal = pattern
+        .elements
+        .iter()
+        .any(|el| matches!(el, PatternElement::Literal { .. }));
+    let any_nondefault_quantifier = pattern.elements.iter().any(|el| {
+        matches!(el, PatternElement::Set { min, max, .. } if *min != 0 || max.is_some())
+    });
+    if has_literal {
+        return None;
+    }
+    if multi && any_nondefault_quantifier {
         return None;
     }
     // BaseLimits: cubie engine handles these via DFS counters (v7-1.5).
@@ -861,14 +909,16 @@ pub fn try_cubie_dispatch(
         .filter(|bl| !bl.is_empty())
         .map(|bls| BaseLimitState::from_pattern(bls, 6));
 
-    // Quantifier with explicit range: cubie engine handles the single Set
-    // pattern's `{min, max}` natively (v7-1.5):
-    //   - `min` → only emit solutions of length ≥ min
-    //   - `max` → cap effective search depth at `min(max_moves, set_max)`
-    // `single_set` is guaranteed by the early-bail above.
-    let (min_length, set_max_override) = match &pattern.elements[0] {
-        PatternElement::Set { min, max, .. } => (*min, *max),
-        _ => unreachable!("single_set guarantee"),
+    // Quantifier (single-set patterns only): `{min, max}` mapped onto the
+    // search. Multi-Set patterns are guaranteed to have all-default
+    // quantifiers by the bail-check above, so they have min=0 / max=None.
+    let (min_length, set_max_override) = if pattern.elements.len() == 1 {
+        match &pattern.elements[0] {
+            PatternElement::Set { min, max, .. } => (*min, *max),
+            _ => (0, None),
+        }
+    } else {
+        (0, None)
     };
 
     let excluded = exclude_axis_from_pattern(&pattern);
@@ -921,49 +971,36 @@ pub fn try_cubie_dispatch(
         }
     };
 
-    // ShortestOnly: stop at first depth with solutions (enumerate=false).
-    // Enumerate/TopN: collect all solutions up to max_moves (enumerate=true).
-    let enumerate = !matches!(req.output_mode, OutputMode::ShortestOnly);
-
     let cancel_arc = should_cancel;
     // Effective search depth: cap by quantifier max (single-set patterns).
     let effective_max_depth = set_max_override
         .map(|m| m.min(req.max_moves))
         .unwrap_or(req.max_moves);
-    let (sols, nodes, ms) = search_cubie_parallel_ex(
-        &initial,
-        &goal_corners,
-        &goal_edges,
-        effective_max_depth,
-        min_length,
-        base_limit_state,
-        excluded,
-        enumerate,
-        cancel_arc,
-    );
 
-    // Enumerate/TopN: sort by length so the UI sees shortest-first. The
-    // single-DFS Enumerate path collects in DFS order, not length order.
-    let mut sols = sols;
+    // Output mode dispatch:
+    //   ShortestOnly      → one call with `ShortestStop`, iterative deepening
+    //                       inside `search_cubie_parallel_ex`.
+    //   EnumerateUpToN /
+    //   TopN              → iterative deepening *here* with `ExactDepthAll`
+    //                       per depth, so solutions stream to the UI in
+    //                       ascending length order (instead of the single-
+    //                       DFS DFS-order that was visible only after the
+    //                       full search completed).
     match req.output_mode {
-        OutputMode::EnumerateUpToN => {
-            sols.sort_by_key(|s| s.len());
-        }
-        OutputMode::TopN => {
-            sols.sort_by_key(|s| s.len());
-            if let Some(n) = req.top_n {
-                sols.truncate(n);
-            }
-        }
-        _ => {}
-    }
-
-    // Emit solutions. ShortestOnly emits all the shortest-tied results;
-    // Enumerate/TopN emits everything in the collected order.
-    let shortest_len = sols.iter().map(|s| s.len()).min();
-    if let Some(cb) = on_solution {
-        match req.output_mode {
-            OutputMode::ShortestOnly => {
+        OutputMode::ShortestOnly => {
+            let (sols, nodes, ms) = search_cubie_parallel_ex(
+                &initial,
+                &goal_corners,
+                &goal_edges,
+                effective_max_depth,
+                min_length,
+                base_limit_state,
+                excluded,
+                DfsMode::ShortestStop,
+                cancel_arc,
+            );
+            let shortest_len = sols.iter().map(|s| s.len()).min();
+            if let Some(cb) = on_solution {
                 if let Some(min_len) = shortest_len {
                     for sol in &sols {
                         if sol.len() == min_len {
@@ -972,20 +1009,65 @@ pub fn try_cubie_dispatch(
                     }
                 }
             }
-            _ => {
-                for sol in &sols {
-                    cb(sol.len(), sol);
+            Some(SearchStats {
+                total_solutions: sols.len(),
+                time_ms: ms,
+                nodes_explored: nodes,
+                shortest_length: shortest_len,
+            })
+        }
+        OutputMode::EnumerateUpToN | OutputMode::TopN => {
+            let top_n = if matches!(req.output_mode, OutputMode::TopN) {
+                req.top_n
+            } else {
+                None
+            };
+            let start = Instant::now();
+            let mut total_nodes = 0usize;
+            let mut all_solutions: Vec<Vec<usize>> = Vec::new();
+            let start_depth = min_length;
+            let mut on_solution_mut = on_solution;
+            for d in start_depth..=effective_max_depth {
+                if cancel_arc() {
+                    break;
+                }
+                let bl_clone = base_limit_state.clone();
+                let (mut sols_d, nodes_d, _) = search_cubie_parallel_ex(
+                    &initial,
+                    &goal_corners,
+                    &goal_edges,
+                    d,
+                    d, // min_length = d → DFS only emits at remaining=0, length d
+                    bl_clone,
+                    excluded,
+                    DfsMode::ExactDepthAll,
+                    cancel_arc,
+                );
+                total_nodes += nodes_d;
+                // Deterministic order within a depth (stable sort by move sequence).
+                sols_d.sort();
+                if let Some(cb) = on_solution_mut.as_mut() {
+                    for sol in &sols_d {
+                        cb(sol.len(), sol);
+                    }
+                }
+                all_solutions.extend(sols_d);
+                if let Some(n) = top_n {
+                    if all_solutions.len() >= n {
+                        all_solutions.truncate(n);
+                        break;
+                    }
                 }
             }
+            let ms = start.elapsed().as_millis();
+            Some(SearchStats {
+                total_solutions: all_solutions.len(),
+                time_ms: ms,
+                nodes_explored: total_nodes,
+                shortest_length: all_solutions.first().map(|s| s.len()),
+            })
         }
     }
-
-    Some(SearchStats {
-        total_solutions: sols.len(),
-        time_ms: ms,
-        nodes_explored: nodes,
-        shortest_length: shortest_len,
-    })
 }
 
 /// Recognize a known preset id from a 54-byte mask. Returns `None` if the
