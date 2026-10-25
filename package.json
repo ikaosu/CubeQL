@@ -1,7 +1,7 @@
 {
   "name": "cubeql",
   "productName": "CubeQL",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CubeQL — Rubik's cube state-search desktop app with sticker masks and the CubeQL query language",
   "private": true,
   "type": "module",

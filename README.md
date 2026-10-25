@@ -92,7 +92,7 @@ cargo build --release --bin cube-cli
 
 GitHub Issues へお寄せください。再現手順 (scramble + DSL + max moves) を添えていただけると助かります。
 
-## 既知の制約 (v0.1.0)
+## 既知の制約 (v0.1.1)
 
 - 3x3x3 のみ (2x2 / 4x4 等は未対応)
 - ステッカー色入力のみ (scramble 文字列直接入力は v1.1 候補)

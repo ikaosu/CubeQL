@@ -5,7 +5,7 @@ exclude = ["tmp-min2phase-test"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 license = "Proprietary"
 authors = ["CubeQL team"]
 

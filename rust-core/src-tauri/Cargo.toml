@@ -1,6 +1,6 @@
 [package]
 name = "cubeql-tauri"
-version = "0.1.0"
+version = "0.1.1"
 description = "CubeQL desktop app (Tauri 2.x). Rubik's cube state-search engine with sticker masks and the CubeQL DSL."
 edition = "2021"
 license = "Proprietary"
