@@ -82,7 +82,22 @@ pub fn run_search_hybrid(input: &SearchInput, cb: SearchCallbacks) -> SearchStat
     //    Threshold: 18 is a typical lower bound for random scramble optimal
     //    HTM length. Below that, min2phase is more likely to time out than
     //    save time.
-    let candidate: Option<Vec<usize>> = if full_htm && input.max_moves < 18 {
+    //
+    //    The candidate is consumed ONLY by `ShortestOnly` (as an upper-bound
+    //    oracle); `EnumerateUpToN` / `TopN` discard it (see dispatch below),
+    //    so running min2phase for those modes is pure waste — and worse, when
+    //    `max_moves` sits just below `phys`'s face-turn optimal, min2phase
+    //    exhaustively proves "no face solution <= max_moves" and hangs
+    //    ("starting...") before IDA* — which finds the real moveset solutions
+    //    — ever runs. min2phase also produces an UNRESTRICTED face-turn solve,
+    //    so for a restricted moveset / BaseLimits query its candidate is
+    //    always Inapplicable. Gate on all three so the oracle only fires where
+    //    it can actually help. (Bug: `[F2<=0,S2<=0] <U,R,F,Rw,M,S>` All<=N
+    //    hung at maxMoves=13 but "found" 11-move solutions at 14.)
+    let run_oracle = matches!(input.output_mode, OutputMode::ShortestOnly)
+        && input.max_moves >= 18
+        && is_min2phase_oracle_applicable(input);
+    let candidate: Option<Vec<usize>> = if !run_oracle {
         None
     } else {
         match try_min2phase_oracle(input) {
@@ -309,6 +324,45 @@ fn is_full_HTM_unrestricted(input: &SearchInput) -> bool {
     true
 }
 
+/// Returns true when min2phase's UNRESTRICTED face-turn full solve could
+/// plausibly satisfy the request, i.e. when running it as an oracle is worth
+/// the cost. Unlike `is_full_HTM_unrestricted`, **wildcards (masks) are
+/// allowed** — a full solve to solved trivially matches any mask, so masked
+/// queries (OLL/PLL presets) still benefit. Rejects anything min2phase's
+/// candidate could never satisfy: a non-solved goal, BaseLimits, or a moveset
+/// that isn't the full six faces. For those, the candidate is guaranteed
+/// Inapplicable, so calling min2phase is pure waste and risks the
+/// "max_depth just below optimal" exhaustion hang.
+fn is_min2phase_oracle_applicable(input: &SearchInput) -> bool {
+    if input.goal != create_solved_facelet() {
+        return false;
+    }
+    if let Some(bl) = &input.pattern.base_limits {
+        if !bl.is_empty() {
+            return false;
+        }
+    }
+    if input.pattern.elements.len() != 1 {
+        return false;
+    }
+    let PatternElement::Set {
+        allowed_bases,
+        min,
+        max,
+        ..
+    } = &input.pattern.elements[0]
+    else {
+        return false;
+    };
+    if *min != 0 || max.is_some() {
+        return false;
+    }
+    let mut bases: Vec<usize> = allowed_bases.clone();
+    bases.sort();
+    bases.dedup();
+    bases == vec![0, 1, 2, 3, 4, 5]
+}
+
 // ----------------------- verify_solution -----------------------
 
 /// Returns true iff `sol` satisfies the request's pattern decomposition,
@@ -512,6 +566,47 @@ mod tests {
         // Sanity upper bound — these tables max at byte values, but unlikely
         // to be over 20 for realistic scrambles.
         assert!(lb < 50, "LB={} is suspiciously high (table likely wrong)", lb);
+    }
+
+    #[test]
+    fn oracle_applicable_full_htm() {
+        let input = input_with("<U,D,R,L,F,B>", 20);
+        assert!(is_min2phase_oracle_applicable(&input));
+    }
+
+    #[test]
+    fn oracle_not_applicable_restricted_moveset() {
+        // Restricted moveset with wide/slice + BaseLimits: min2phase's
+        // unrestricted face solve can never satisfy this, so the oracle must
+        // not fire (it would hang at maxMoves just below phys optimal). This
+        // is the reported `[F2<=0,S2<=0] <U,R,F,Rw,M,S>` bug shape.
+        let input = input_with("[F2<=0, S2<=0] <U,R,F,Rw,M,S>", 13);
+        assert!(!is_min2phase_oracle_applicable(&input));
+    }
+
+    #[test]
+    fn oracle_applicable_masked_full_htm() {
+        // Masked (wildcards) but full six faces — OLL/PLL preset shape. The
+        // oracle SHOULD still apply (a full solve trivially matches the mask).
+        use crate::mask::bake_in_mask;
+        let solved = create_solved_facelet();
+        let mut mask = crate::mask::create_full_mask();
+        // Mask out a few non-U positions to simulate a preset.
+        for i in 18..27 {
+            mask[i] = 0;
+        }
+        let pattern = parse_pattern("<U,D,R,L,F,B>").unwrap();
+        let initial = bake_in_mask(&solved, &mask);
+        let input = SearchInput {
+            initial,
+            goal: solved,
+            pattern,
+            max_moves: 20,
+            output_mode: OutputMode::ShortestOnly,
+            top_n: None,
+            use_pruning_table: true,
+        };
+        assert!(is_min2phase_oracle_applicable(&input));
     }
 
     #[test]
