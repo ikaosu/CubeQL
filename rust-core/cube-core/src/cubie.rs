@@ -219,14 +219,12 @@ fn identify_corner_at_slot(facelet: &Facelet, slot: usize) -> (u8, u8) {
 /// the standard F-axis flip: an edge is "oriented" (ori=0) iff it would
 /// reach its home slot using only `<U, D, L, R, F2, B2>` moves.
 ///
-/// For practical detection: at any slot, the "primary" sticker (the first
-/// in `EDGE_FACELET_POSITIONS[slot]`) must hold a non-flipping color. The
-/// rule used here matches the one min2phase / Kociemba's two-phase use:
-///
-///   * Primary sticker on U/D face: must hold U/D color
-///   * Primary sticker on F/B face: must hold a non-F/B color (i.e. U or D)
-///   * Primary sticker on L/R face: edge is in E slice (FR/FL/BL/BR); the
-///     primary sticker (on R/L face for these slots) must hold F or B color
+/// The rule matches min2phase / Kociemba's two-phase, `build_face_moves`
+/// (only F/B quarter turns flip) and `cubie_to_facelet`: every edge has a
+/// reference color — its U/D color, or its F/B color for the E-slice edges
+/// FR/FL/BL/BR — and ori=0 iff that color sits on the slot's primary sticker
+/// (the first in `EDGE_FACELET_POSITIONS[slot]`, on the U/D face for slots
+/// 0..8 and on the F/B face for slots 8..12).
 fn identify_edge_at_slot(facelet: &Facelet, slot: usize) -> (u8, u8) {
     let positions = &EDGE_FACELET_POSITIONS[slot];
     let mut colors = [0u8; 2];
@@ -248,28 +246,18 @@ fn identify_edge_at_slot(facelet: &Facelet, slot: usize) -> (u8, u8) {
         return (POSITION_UNKNOWN, ORIENTATION_UNKNOWN);
     }
 
-    // Edge orientation (F-axis convention).
-    // For slots 0..8 (UR/UF/UL/UB/DR/DF/DL/DB): primary sticker is on
-    // U or D face. EO=0 iff that sticker is U or D color.
-    // For slots 8..12 (FR/FL/BL/BR): primary sticker is on F or B face,
-    // but the U/D color is on the other sticker. EO=0 iff THIS slot's
-    // primary holds F or B color (i.e. the non-U/D sticker is on the
-    // outer (F/B) face).
-    let primary = colors[0];
-    let ori = if slot < 8 {
-        // primary sticker on U/D face — must be U/D color
-        if primary == 0 || primary == 3 {
-            0
-        } else {
-            1
-        }
+    // Edge orientation (F-axis convention): EO=0 iff the primary sticker
+    // holds the cubie's reference color. A U/D edge's reference is its U/D
+    // color; an E-slice edge (no U/D color) uses its F/B color. The rule is
+    // the same for every slot — an E-slice edge sitting in the U/D layer
+    // (e.g. FR at UR after `R`) is oriented when its F/B color is on U/D.
+    let is_ud = |c: u8| c == 0 || c == 3;
+    let is_fb = |c: u8| c == 2 || c == 5;
+    let (primary, other) = (colors[0], colors[1]);
+    let ori = if is_ud(primary) || (is_fb(primary) && !is_ud(other)) {
+        0
     } else {
-        // E-slice edge — primary on F/B face — must be F/B color
-        if primary == 2 || primary == 5 {
-            0
-        } else {
-            1
-        }
+        1
     };
 
     (cubie_idx as u8, ori)
@@ -592,6 +580,31 @@ mod tests {
                 "scramble {:?} cubie/facelet mismatch",
                 scramble
             );
+        }
+    }
+
+    #[test]
+    fn facelet_to_cubie_matches_cubie_moves() {
+        // The search engine reads the UI facelet through `facelet_to_cubie`
+        // and then applies `build_face_moves`, so both must share one edge
+        // orientation convention. Single R / F moves displace E-slice edges
+        // into the U/D layer and vice versa — the cases a solved-only check
+        // misses.
+        let solved_facelet = create_solved_facelet();
+        let cubie_moves = build_face_moves();
+        let scrambles = [
+            "R", "L'", "F", "B2", "R L'", "F B", "U D'",
+            "F2 U2 R F B' D R2 D2 L D' B' R B' L'",
+        ];
+        for scramble in &scrambles {
+            let moves = scramble_to_move_indices(scramble);
+            let f_after = apply_moves(&solved_facelet, &moves);
+            let mut expected = CubieState::solved();
+            for &m in &moves {
+                expected = apply_cubie_move(&expected, &cubie_moves[m]);
+            }
+            assert_eq!(facelet_to_cubie(&f_after), expected, "scramble {:?}", scramble);
+            assert_eq!(cubie_to_facelet(&expected), f_after, "scramble {:?}", scramble);
         }
     }
 }

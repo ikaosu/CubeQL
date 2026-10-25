@@ -289,6 +289,11 @@ fn run_case(case: &Case, repeat: usize, warmup: usize, timeout_ms: u128) -> Row 
             status = format!("assertion_failed:no_solution_but_expected_<={}", max_len);
         }
     }
+    // A solution that does not solve the cube overrides every other status.
+    let invalid_solutions: usize = samples.iter().map(|r| r.invalid_solutions).sum();
+    if invalid_solutions > 0 {
+        status = format!("invalid_solutions={}", invalid_solutions);
+    }
 
     Row {
         case_id: case.id.clone(),
@@ -312,19 +317,34 @@ struct RunOutcome {
     solutions: usize,
     first_length: Option<usize>,
     timed_out: bool,
+    invalid_solutions: usize,
 }
 
 fn run_once(input: &SearchInput, request: &SearchRequest, timeout_ms: u128) -> RunOutcome {
     use std::sync::{Arc, Mutex};
     let first_len: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+    let invalid: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     let deadline = Instant::now() + std::time::Duration::from_millis(timeout_ms as u64);
 
     // Try cubie engine first (Phase v4-9 dispatch). Falls through to legacy
     // if the request shape doesn't fit.
     let t0 = Instant::now();
     {
+        // Every cubie solution is replayed on the full-colour cube and must
+        // solve all visible stickers (preset goal semantics). Without this the
+        // bench reported "ok" for F2L solutions that solved a mis-converted
+        // state rather than the user's cube.
+        let mut initial = create_solved_facelet();
+        initial.copy_from_slice(&request.initial);
+        let solved = create_solved_facelet();
+        let mask = request.mask.clone();
         let first_clone = Arc::clone(&first_len);
-        let mut emit = move |length: usize, _moves: &[usize]| {
+        let invalid_clone = Arc::clone(&invalid);
+        let mut emit = move |length: usize, moves: &[usize]| {
+            let after = apply_moves(&initial, moves);
+            if !(0..after.len()).all(|i| mask[i] == 0 || after[i] == solved[i]) {
+                *invalid_clone.lock().unwrap() += 1;
+            }
             let mut g = first_clone.lock().unwrap();
             if g.is_none() {
                 *g = Some(length);
@@ -347,6 +367,7 @@ fn run_once(input: &SearchInput, request: &SearchRequest, timeout_ms: u128) -> R
                 solutions: stats.total_solutions,
                 first_length: first,
                 timed_out,
+                invalid_solutions: *invalid.lock().unwrap(),
             };
         }
     }
@@ -373,6 +394,9 @@ fn run_once(input: &SearchInput, request: &SearchRequest, timeout_ms: u128) -> R
         solutions: stats.total_solutions,
         first_length: first,
         timed_out,
+        // Legacy engine solutions are not replayed here (mask-baked goal with
+        // rotation tolerance); only the cubie path is checked.
+        invalid_solutions: 0,
     }
 }
 

@@ -394,13 +394,33 @@ pub enum DfsMode {
     ExactDepthAll,
 }
 
+/// Canonical move-sequence filter for faces `U=0, D=1, R=2, L=3, F=4, B=5`
+/// (`last_face = -1` at the root). Prunes only sequences that duplicate a
+/// shorter or equivalent one:
+///   - the same face twice in a row (`R R'` collapses);
+///   - opposite faces in descending order (`L R` == `R L` because they
+///     commute, so only U→D, R→L, F→B is kept). This also rules out a third
+///     move on the same axis (`R L R`).
+///
+/// Adjacent opposite faces themselves (`R L'`, `F2 B2`) must stay reachable:
+/// U2 in `<D,R,L,F,B>` is 9 moves only through such pairs. Pruning the whole
+/// axis instead returned 13 there.
+#[inline]
+fn is_redundant_after(last_face: i32, face: usize) -> bool {
+    if last_face < 0 {
+        return false;
+    }
+    let last = last_face as usize;
+    face == last || (face / 2 == last / 2 && face < last)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dfs_search(
     state: &CubieState,
     goal_corners: &[CornerCubie; NUM_CORNERS],
     goal_edges: &[EdgeCubie; NUM_EDGES],
     remaining: usize,
-    last_axis: i32,
+    last_face: i32,
     excluded_face_axes: &[bool; 6],
     face_moves: &[CubieMove],
     adm: &LbAdmissibility,
@@ -467,12 +487,7 @@ fn dfs_search(
         if excluded_face_axes[axis] {
             continue;
         }
-        // No two consecutive moves on same axis (face_axis = axis/1 for face
-        // turns; pair U/D, R/L, F/B as same "physical axis" for canonicality)
-        let physical_axis = axis / 2; // U,D -> 0; R,L -> 1; F,B -> 2
-        if last_axis as i32 == physical_axis as i32 {
-            // Allow only if axis > last_axis_specific (canonical order U<D, R<L, F<B)
-            // Skip to avoid duplicate sequences
+        if is_redundant_after(last_face, axis) {
             continue;
         }
         // base index in our face_moves: U=0, D=1, R=2, L=3, F=4, B=5
@@ -500,7 +515,7 @@ fn dfs_search(
                 goal_corners,
                 goal_edges,
                 remaining - 1,
-                physical_axis as i32,
+                axis as i32,
                 excluded_face_axes,
                 face_moves,
                 adm,
@@ -669,7 +684,6 @@ pub fn search_cubie_parallel_ex(
                 // Special case: no moves applied; checked by serial path at depth=0.
                 return;
             }
-            let physical_axis = axis / 2;
             for variant in 0..3 {
                 if stop_at_first && found_this_depth.load(Ordering::Relaxed) {
                     return;
@@ -690,13 +704,21 @@ pub fn search_cubie_parallel_ex(
                 let mut local_nodes: usize = 0;
                 let mut local_path: Vec<usize> = vec![mv_idx];
                 let mut local_cancelled = false;
-                let mut cancel_fn = || cancelled.load(Ordering::Relaxed) || should_cancel();
+                // ShortestStop: once any axis-thread has a solution at this
+                // depth the shortest length is settled (every shallower depth
+                // was exhausted), so the other threads stop instead of
+                // finishing their whole subtree.
+                let mut cancel_fn = || {
+                    cancelled.load(Ordering::Relaxed)
+                        || should_cancel()
+                        || (stop_at_first && found_this_depth.load(Ordering::Relaxed))
+                };
                 dfs_search(
                     &new_state,
                     goal_corners,
                     goal_edges,
                     depth - 1,
-                    physical_axis as i32,
+                    axis as i32,
                     &excluded_face_axes,
                     &face_moves,
                     &adm,
@@ -1176,5 +1198,62 @@ mod tests {
             search_cubie(&initial, &gc, &ge, 8, exclude, false, &mut cancel);
         eprintln!("Sune via <R,U>: {} sols / {} nodes / {} ms", sols.len(), nodes, ms);
         assert!(!sols.is_empty(), "Sune state must be solvable with <R, U>");
+    }
+
+    #[test]
+    fn canonical_filter_keeps_ascending_opposite_faces() {
+        // U=0, D=1, R=2, L=3, F=4, B=5
+        assert!(!is_redundant_after(-1, 3));
+        assert!(is_redundant_after(2, 2)); // R R
+        assert!(!is_redundant_after(2, 3)); // R L
+        assert!(is_redundant_after(3, 2)); // L R (dup of R L)
+        assert!(!is_redundant_after(0, 1)); // U D
+        assert!(is_redundant_after(5, 4)); // B F (dup of F B)
+        assert!(!is_redundant_after(3, 4)); // L F
+    }
+
+    #[test]
+    fn opposite_face_pair_solves_in_two_moves() {
+        let solved_f = create_solved_facelet();
+        let scrambled_f = apply_moves(&solved_f, &scramble_to_moves("R L'"));
+        let initial = facelet_to_cubie(&scrambled_f);
+        let (gc, ge) = solved_goal();
+        let mut cancel = || false;
+        let (sols, _, _) = search_cubie(&initial, &gc, &ge, 4, [false; 6], false, &mut cancel);
+        let shortest = sols.iter().map(|s| s.len()).min();
+        assert_eq!(shortest, Some(2), "R L' must be undone by an adjacent R' L");
+        for sol in &sols {
+            assert_eq!(apply_moves(&scrambled_f, sol), solved_f);
+        }
+    }
+
+    #[test]
+    fn u2_in_drlfb_is_nine_moves_via_dispatch() {
+        // Same request shape as the Tauri UI (full mask, restricted DSL,
+        // shortest-only). Optimum 9 verified by an independent exhaustive
+        // meet-in-the-middle search; every optimum has an opposite-face pair.
+        use crate::search::{OutputMode, SearchRequest};
+        let solved_f = create_solved_facelet();
+        let u2 = apply_moves(&solved_f, &scramble_to_moves("U2"));
+        let req = SearchRequest {
+            job_id: "u2-drlfb".into(),
+            initial: u2.to_vec(),
+            mask: vec![1u8; 54],
+            dsl: "<D, R, L, F, B>".into(),
+            max_moves: 23,
+            output_mode: OutputMode::ShortestOnly,
+            top_n: None,
+        };
+        let mut sols: Vec<Vec<usize>> = Vec::new();
+        let mut emit = |_len: usize, m: &[usize]| sols.push(m.to_vec());
+        let cancel = || false;
+        let stats = try_cubie_dispatch(&req, Some(&mut emit), &cancel)
+            .expect("full-mask restricted DSL must take the cubie path");
+        assert_eq!(stats.shortest_length, Some(9));
+        assert!(!sols.is_empty());
+        for sol in &sols {
+            assert_eq!(sol.len(), 9);
+            assert_eq!(apply_moves(&u2, sol), solved_f);
+        }
     }
 }
